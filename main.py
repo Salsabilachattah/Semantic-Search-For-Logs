@@ -4,6 +4,9 @@ import sys
 from pathlib import Path
 import psycopg2
 from psycopg2 import sql
+from config import load_env
+
+load_env()
 
 if platform.system() == "Windows":
     hadoop_home = os.environ.get("HADOOP_HOME") or os.environ.get("hadoop.home.dir")
@@ -41,78 +44,81 @@ from pyspark.sql.functions import regexp_extract, split, lower, regexp_replace, 
 # ===========================
 # 1. DATA CLEANING WITH SPARK
 # ===========================
-# spark = SparkSession.builder \
-#     .appName("LogPipeline") \
-#     .config("spark.executor.memory", "4g") \
-#     .getOrCreate()
+spark = SparkSession.builder \
+    .appName("LogPipeline") \
+    .config("spark.executor.memory", "4g") \
+    .getOrCreate()
 
-# #load the full dataset
-# df = spark.read.text("access.log/access.log")  
+#load the full dataset
+df = spark.read.text("access.log/access.log")  
 
-# # Regex pattern for the log format
-# pattern = r'^(\S+) - - \[(.*?)\] "(.*?)" (\d{3}) (\d+) "(.*?)" "(.*?)"'
+# Regex pattern for the log format
+pattern = r'^(\S+) - - \[(.*?)\] "(.*?)" (\d{3}) (\d+) "(.*?)" "(.*?)"'
 
-# # Extract fields using regex
-# df_parsed = df.select(
-#     regexp_extract('value', pattern, 1).alias('ip'),
-#     regexp_extract('value', pattern, 2).alias('timestamp'),
-#     regexp_extract('value', pattern, 3).alias('request'),
-#     regexp_extract('value', pattern, 4).alias('status'),
-#     regexp_extract('value', pattern, 5).alias('size'),
-#     regexp_extract('value', pattern, 6).alias('referrer'),
-#     regexp_extract('value', pattern, 7).alias('user_agent')
-# )
+# Extract fields using regex
+df_parsed = df.select(
+    regexp_extract('value', pattern, 1).alias('ip'),
+    regexp_extract('value', pattern, 2).alias('timestamp'),
+    regexp_extract('value', pattern, 3).alias('request'),
+    regexp_extract('value', pattern, 4).alias('status'),
+    regexp_extract('value', pattern, 5).alias('size'),
+    regexp_extract('value', pattern, 6).alias('referrer'),
+    regexp_extract('value', pattern, 7).alias('user_agent')
+)
 
-# # Extract method + URL (robust to malformed request strings)
-# # Spark array indexing throws if the index is out of bounds, so we use SQL get() which returns NULL.
-# df_parsed = (
-#     df_parsed
-#     .withColumn("method", expr("get(split(request, ' '), 0)"))
-#     .withColumn("url", expr("get(split(request, ' '), 1)"))
-# )
+# Extract method + URL (robust to malformed request strings)
+# Spark array indexing throws if the index is out of bounds, so we use SQL get() which returns NULL.
+df_parsed = (
+    df_parsed
+    .withColumn("method", expr("get(split(request, ' '), 0)"))
+    .withColumn("url", expr("get(split(request, ' '), 1)"))
+)
 
-# # Clean URL
-# df_clean = df_parsed.withColumn(
-#     "clean_url",
-#     lower(regexp_replace("url", r'\d+', ''))
-# )
+# Clean URL
+df_clean = df_parsed.withColumn(
+    "clean_url",
+    lower(regexp_replace("url", r'\d+', ''))
+)
 
-# # Build semantic message
+# Build semantic message
 
-# df_final = df_clean.withColumn("message", concat_ws(" ", col("method"), col("clean_url")))
+df_final = df_clean.withColumn("message", concat_ws(" ", col("method"), col("clean_url")))
 
-# # impossible to process the full dataset on a local machine, so we sample 5% of the data for testing purposes
-# df_sample = df_final.sample(0.05)
+# impossible to process the full dataset on a local machine, so we sample 5% of the data for testing purposes
+df_sample = df_final.sample(0.05)
 
-# # Save to parquet
-# df_sample.select("timestamp", "message").write.mode("overwrite").parquet("logs_clean")
+# Save to parquet
+df_sample.select("timestamp", "message").write.mode("overwrite").parquet("logs_clean")
 
-# spark.stop()
+spark.stop()
 
 
 # =========================
 # 2. EMBEDDINGS
 # =========================
 
-# import pandas as pd
-# from sentence_transformers import SentenceTransformer
+import pandas as pd
+from sentence_transformers import SentenceTransformer
 
-# if not Path("logs_clean").exists():
-#     raise RuntimeError(
-#         "Missing parquet output folder: ./logs_clean\n"
-#         "Fix: run the Spark cleaning step (section 1) to generate logs_clean, then rerun this script."
-#     )
+if not Path("logs_clean").exists():
+    raise RuntimeError(
+        "Missing parquet output folder: ./logs_clean\n"
+        "Fix: run the Spark cleaning step (section 1) to generate logs_clean, then rerun this script."
+    )
 
-# df = pd.read_parquet("logs_clean")
-# messages = df["message"].astype(str).tolist()
+df = pd.read_parquet("logs_clean")
+messages = df["message"].astype(str).tolist()
 
-# model = SentenceTransformer("all-MiniLM-L6-v2")
+MODEL_NAME = os.environ.get("MODEL_NAME_OR_PATH", "all-MiniLM-L6-v2")
+EMBEDDING_DIM = 384
 
-# embeddings = model.encode(
-#     messages,
-#     batch_size=64,
-#     show_progress_bar=True,
-# )
+model = SentenceTransformer(MODEL_NAME)
+
+embeddings = model.encode(
+    messages,
+    batch_size=128,
+    show_progress_bar=True,
+)
 
 
 # =========================
@@ -120,18 +126,17 @@ from pyspark.sql.functions import regexp_extract, split, lower, regexp_replace, 
 # =========================
 
 
-PG_HOST = "localhost"
-PG_PORT = "5432"
-PG_DBNAME = "logs_db"
-# username = os.environ.get("username") or "postgres"
-# # password = os.environ.get("password") or "password"
-username = "postgres"
-password = "password"
+PG_HOST = os.environ["PG_HOST"]
+PG_PORT = os.environ["PG_PORT"]
+PG_DBNAME = os.environ["PG_DBNAME"]
+PG_USER = os.environ["PG_USER"]
+PG_PASSWORD = os.environ["PG_PASSWORD"]
+
 def _connect(dbname: str):
     return psycopg2.connect(
         dbname=dbname,
-        user=username,
-        password=password,
+        user=PG_USER,
+        password=PG_PASSWORD,
         host=PG_HOST,
         port=PG_PORT,
     )
@@ -185,32 +190,46 @@ def _to_pgvector_literal(values) -> str:
     return "[" + ",".join(str(float(x)) for x in values) + "]"
 
 # Create extension + table
-# cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
 
-# cur.execute("""
-# CREATE TABLE IF NOT EXISTS logs (
-#     id SERIAL PRIMARY KEY,
-#     timestamp TEXT,
-#     message TEXT,
-#     embedding VECTOR(384)
-# );
-# """)
+cur.execute("""
+CREATE TABLE IF NOT EXISTS logs (
+    id SERIAL PRIMARY KEY,
+    timestamp TEXT,
+    message TEXT,
+    embedding VECTOR(384)
+);
+""")
+
+cur.execute("SELECT atttypmod FROM pg_attribute WHERE attrelid = 'logs'::regclass AND attname = 'embedding';")
+embedding_typmod = cur.fetchone()[0]
+if embedding_typmod != EMBEDDING_DIM:
+    raise RuntimeError(
+        f"Existing logs.embedding has dimension {embedding_typmod}, but {MODEL_NAME} needs {EMBEDDING_DIM}.\n"
+        "Fix: run this in psql, then rerun main.py:\n"
+        "DROP TABLE IF EXISTS logs;\n"
+    )
 
 conn.commit()
 
 # Insert in batches
-# for i in range(0, len(messages), 1000):
-#     batch_msgs = messages[i:i+1000]
-#     batch_embs = embeddings[i:i+1000]
-#     batch_ts = df["timestamp"].iloc[i:i+1000]
+cur.execute("SELECT COUNT(*) FROM logs;")
+existing_rows = cur.fetchone()[0]
+if existing_rows:
+    print(f"logs already contains {existing_rows} rows; skipping insertion.")
+else:
+    for i in range(0, len(messages), 1000):
+        batch_msgs = messages[i:i+1000]
+        batch_embs = embeddings[i:i+1000]
+        batch_ts = df["timestamp"].iloc[i:i+1000]
 
-#     for msg, emb, ts in zip(batch_msgs, batch_embs, batch_ts):
-#         cur.execute(
-#             "INSERT INTO logs (timestamp, message, embedding) VALUES (%s, %s, %s::vector)",
-#             (ts, msg, _to_pgvector_literal(emb))
-#         )
+        for msg, emb, ts in zip(batch_msgs, batch_embs, batch_ts):
+            cur.execute(
+                "INSERT INTO logs (timestamp, message, embedding) VALUES (%s, %s, %s::vector)",
+                (ts, msg, _to_pgvector_literal(emb))
+            )
 
-#     conn.commit()
+        conn.commit()
 
 
 # =========================
@@ -235,7 +254,7 @@ query_vector_literal = _to_pgvector_literal(query_vector)
 cur.execute("""
 SELECT message
 FROM logs
-ORDER BY embedding <-> %s::vector
+ORDER BY embedding <=> %s::vector
 LIMIT 10;
 """, (query_vector_literal,))
 
