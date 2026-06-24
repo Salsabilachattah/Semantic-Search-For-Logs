@@ -24,9 +24,6 @@ htmlcov/
 .ipynb_checkpoints/
 
 # Local data and generated outputs
-access.log/
-logs_clean/
-hadoop/
 *.log
 *.parquet
 *.csv
