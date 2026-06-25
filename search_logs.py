@@ -7,6 +7,8 @@ from config import load_env
 
 load_env()
 
+TABLE_NAME = "sematic_logs"
+
 
 def _to_pgvector_literal(values) -> str:
     """Convert a Python sequence of numbers to pgvector's text input format."""
@@ -61,7 +63,7 @@ def main() -> int:
 
     op = "<=>" if args.distance == "cosine" else "<->"
     opclass = "vector_cosine_ops" if args.distance == "cosine" else "vector_l2_ops"
-    index_name = "logs_embedding_cosine_idx" if args.distance == "cosine" else "logs_embedding_l2_idx"
+    index_name = "sematic_logs_embedding_cosine_idx" if args.distance == "cosine" else "sematic_logs_embedding_l2_idx"
 
     with _connect(
         host=args.host,
@@ -83,14 +85,14 @@ def main() -> int:
                 cur.execute(
                     f"""
                     CREATE INDEX IF NOT EXISTS {index_name}
-                    ON logs USING ivfflat (embedding {opclass});
+                    ON {TABLE_NAME} USING ivfflat (embedding {opclass});
                     """
                 )
 
             cur.execute(
                 f"""
-                SELECT id, timestamp, message
-                FROM logs
+                SELECT id, status, timestamp, method, clean_url, message
+                FROM {TABLE_NAME}
                 ORDER BY embedding {op} %s::vector
                 LIMIT %s;
                 """,
@@ -99,8 +101,8 @@ def main() -> int:
             rows = cur.fetchall()
 
     print("\n=== SEARCH RESULTS ===")
-    for log_id, timestamp, message in rows:
-        print(f"[{log_id}] {timestamp}  {message}")
+    for log_id, status, timestamp, method, clean_url, message in rows:
+        print(f"[{log_id}] {status} {timestamp} {method} {clean_url} | {message}")
 
     return 0
 

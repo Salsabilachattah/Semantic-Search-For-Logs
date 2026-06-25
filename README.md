@@ -37,6 +37,11 @@ PG_USER=postgres
 PG_PASSWORD=your_password
 MODEL_NAME_OR_PATH=all-MiniLM-L6-v2
 WEB_PORT=8000
+RAW_LOG_PATH=access.log/access.log
+CLEAN_LOG_PATH=logs_clean
+SAMPLE_FRACTION=0.05
+RUN_SPARK_CLEANING=1
+EMBEDDING_BATCH_SIZE=128
 ```
 
 ## PostgreSQL Setup
@@ -70,11 +75,35 @@ venv\Scripts\python.exe main.py
 
 `main.py` will:
 
-- read the cleaned logs from `logs_clean`
-- generate embeddings
-- create the `logs` table if needed
+- parse Apache logs with Spark
+- normalize URLs and create semantic messages
+- save the cleaned dataset to `logs_clean`
+- generate embeddings with `all-MiniLM-L6-v2`
+- create the `sematic_logs` table with analytical fields
 - insert rows if the table is empty
 - create an IVFFlat vector index
+- create analytical indexes on status, timestamp, and message
+
+The PostgreSQL table stores:
+
+- `ip`
+- `timestamp`
+- `method`
+- `url`
+- `clean_url`
+- `status`
+- `size`
+- `referrer`
+- `user_agent`
+- `message`
+- `embedding`
+
+If you already created an older table with only `timestamp`, `message`, and `embedding`, drop it before running the updated pipeline:
+
+```sql
+DROP TABLE IF EXISTS logs;
+DROP TABLE IF EXISTS sematic_logs;
+```
 
 ## Command-Line Search
 
@@ -106,9 +135,34 @@ The web interface includes:
 
 - semantic search
 - keyword search
-- frequent message groups
-- temporal evolution by keyword
+- recurrent HTTP error detection
+- temporal evolution of HTTP errors
 - database statistics
+
+These views cover the required practical cases:
+
+- find logs semantically similar to a critical error
+- identify frequent error groups
+- analyze temporal evolution of similar/error logs
+- compare semantic search with keyword search
+
+## Lab Progress
+
+Implemented:
+
+- Phase 1: dataset format and storage schema are represented in the code and README
+- Phase 2: Spark ingestion, parsing, cleaning, normalization, and sampled large-volume processing
+- Phase 3: batch embeddings, pgvector insertion, and similarity index creation
+- Phase 4: semantic search, recurrent error groups, temporal error analysis, and keyword comparison
+- Final demo: browser interface in `web_app.py`
+
+Still recommended for the final report:
+
+- add screenshots of the web interface
+- describe the pipeline architecture diagram
+- explain why `all-MiniLM-L6-v2` was used
+- report dataset volume, number of indexed rows, and sample search results
+- discuss limitations of sampling and possible scaling improvements
 
 
 ## Notes

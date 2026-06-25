@@ -75,14 +75,48 @@ def frequent_messages(limit: int):
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT NULL, NULL, COUNT(*) AS count, message
-                FROM logs
-                GROUP BY message
-                ORDER BY count DESC
+                SELECT
+                    cluster_id,
+                    NULL AS timestamp,
+                    COUNT(*) AS frequency,
+                    (
+                        SELECT message
+                        FROM logs l2
+                        WHERE l2.cluster_id = l1.cluster_id
+                          AND (
+                                l2.message ILIKE '%error%'
+                             OR l2.message ILIKE '%exception%'
+                             OR l2.message ILIKE '%fail%'
+                             OR l2.message ILIKE '%failed%'
+                             OR l2.message ILIKE '%timeout%'
+                             OR l2.message ILIKE '%critical%'
+                             OR l2.message ILIKE '%fatal%'
+                             OR l2.message ILIKE '%refused%'
+                             OR l2.message ILIKE '%denied%'
+                          )
+                        GROUP BY message
+                        ORDER BY COUNT(*) DESC
+                        LIMIT 1
+                    ) AS representative_message
+                FROM logs l1
+                WHERE
+                      l1.message ILIKE '%error%'
+                   OR l1.message ILIKE '%exception%'
+                   OR l1.message ILIKE '%fail%'
+                   OR l1.message ILIKE '%failed%'
+                   OR l1.message ILIKE '%timeout%'
+                   OR l1.message ILIKE '%critical%'
+                   OR l1.message ILIKE '%fatal%'
+                   OR l1.message ILIKE '%refused%'
+                   OR l1.message ILIKE '%denied%'
+                GROUP BY cluster_id
+                HAVING COUNT(*) > 1
+                ORDER BY frequency DESC
                 LIMIT %s;
                 """,
                 (limit,),
             )
+
             return cur.fetchall()
 
 
@@ -130,17 +164,22 @@ def parse_limit(raw_value: str) -> int:
 
 def rows_to_dicts(rows):
     output = []
-    for log_id, timestamp, score, message in rows:
+
+    for row in rows:
+        print("ROW:", row, "LEN:", len(row))
+
+        log_id, timestamp, score, message = row
+
         if isinstance(score, float):
             score = round(score, 4)
-        output.append(
-            {
-                "id": "" if log_id is None else log_id,
-                "timestamp": "" if timestamp is None else timestamp,
-                "score": "" if score is None else score,
-                "message": "" if message is None else message,
-            }
-        )
+
+        output.append({
+            "id": "" if log_id is None else log_id,
+            "timestamp": "" if timestamp is None else timestamp,
+            "score": "" if score is None else score,
+            "message": "" if message is None else message,
+        })
+
     return output
 
 
